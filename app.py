@@ -6,6 +6,10 @@ import os
 import time
 import base64
 from PIL import Image
+
+# Automatically install Playwright Chromium when running on Streamlit Cloud
+os.system("playwright install chromium")
+
 import database
 import scraper
 import generator
