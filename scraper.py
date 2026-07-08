@@ -233,7 +233,7 @@ def scrape_google_maps(query, limit, headless, on_progress):
     with sync_playwright() as p:
         # Launch browser
         browser = p.chromium.launch(
-            headless=headless,
+            headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -248,6 +248,17 @@ def scrape_google_maps(query, limit, headless, on_progress):
             viewport={'width': 1280, 'height': 800}
         )
         
+        context.set_default_timeout(60000)
+        context.set_default_navigation_timeout(90000)
+        
+        def route_intercept(route):
+            if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+                route.abort()
+            else:
+                route.continue_()
+                
+        context.route("**/*", route_intercept)
+        
         page = context.new_page()
         
         # Inject standard stealth variables
@@ -255,11 +266,20 @@ def scrape_google_maps(query, limit, headless, on_progress):
         
         search_url = f"https://www.google.com/maps/search/{urllib.parse.quote_plus(query)}"
         on_progress(f"Navigating to search page...")
-        page.goto(search_url)
+        
+        for attempt in range(3):
+            try:
+                page.goto(search_url, timeout=90000)
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise e
+                on_progress(f"Navigation failed, retrying ({attempt+1}/3)...")
+                page.wait_for_timeout(3000)
         
         # Wait for results panel or single business view
         try:
-            page.wait_for_selector('h1, a[href*="/maps/place/"]', timeout=20000)
+            page.wait_for_selector('h1, a[href*="/maps/place/"]', timeout=60000)
         except Exception as e:
             on_progress("Error: Timeout waiting for search results page to load.")
             browser.close()
@@ -323,7 +343,7 @@ def scrape_google_maps(query, limit, headless, on_progress):
         # It's a list. Locate the feed container
         feed_selector = 'div[role="feed"]'
         try:
-            page.wait_for_selector(feed_selector, timeout=15000)
+            page.wait_for_selector(feed_selector, timeout=60000)
         except Exception as e:
             on_progress("Could not find results feed. Trying to extract visible elements anyway...")
             
@@ -384,9 +404,18 @@ def scrape_google_maps(query, limit, headless, on_progress):
             time.sleep(delay)
             
             try:
-                page.goto(url)
+                for attempt in range(3):
+                    try:
+                        page.goto(url, timeout=90000)
+                        break
+                    except Exception as e:
+                        if attempt == 2:
+                            raise e
+                        on_progress(f"Navigation failed, retrying ({attempt+1}/3)...")
+                        page.wait_for_timeout(3000)
+                        
                 # Wait for title
-                page.wait_for_selector('h1', timeout=15000)
+                page.wait_for_selector('h1', timeout=60000)
                 page.wait_for_timeout(2000) # Render delay for sub-elements
                 
                 name = page.locator('h1').first.inner_text().strip()
