@@ -50,6 +50,10 @@ def generate_templated_proposal(lead, template):
         phone=phone,
         address=address
     )
+    
+    if not template:
+        template = "Hi {name},\n\nWe noticed your {category} business in {location} doesn't have a website yet. We'd love to help build one for you!\n\nBest,\nAccelerator Technologies"
+        
     return template.format_map(safe_data)
 
 def generate_ai_proposal(lead, api_key, provider="Gemini", language="English"):

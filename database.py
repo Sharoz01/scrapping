@@ -90,7 +90,7 @@ def insert_lead(name, address, phone, website, category, query, google_maps_url=
             "name": name,
             "address": address,
             "phone": phone,
-            "website": None,
+            "website": website,
             "category": category,
             "query": query,
             "google_maps_url": google_maps_url,
@@ -176,15 +176,12 @@ def update_custom_proposal(lead_id, proposal):
         print(f"Update proposal error: {e}")
 
 def get_daily_scraped_count():
-    last_reset = get_setting('last_reset_timestamp', '')
-    if not last_reset:
-        last_reset = datetime.now().isoformat()
-        save_setting('last_reset_timestamp', last_reset)
+    today_start = datetime.combine(datetime.today(), datetime.min.time()).isoformat()
     supabase = get_supabase_client()
     if not supabase:
         return 0
     try:
-        result = supabase.table("leads").select("id", count="exact").gte("scraped_date", last_reset).execute()
+        result = supabase.table("leads").select("id", count="exact").gte("scraped_date", today_start).execute()
         return result.count or 0
     except:
         return 0

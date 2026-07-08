@@ -252,7 +252,8 @@ def scrape_google_maps(query, limit, headless, on_progress):
         context.set_default_navigation_timeout(90000)
         
         def route_intercept(route):
-            if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+            # Unblocked "stylesheet" because Google Maps relies on it to render the feed container
+            if route.request.resource_type in ["image", "font", "media"]:
                 route.abort()
             else:
                 route.continue_()
