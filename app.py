@@ -390,7 +390,7 @@ with tab_queue:
                     # Pre-fill URL query parameters
                     encoded_message = urllib.parse.quote(new_proposal)
                     whatsapp_web_url = f"https://web.whatsapp.com/send?phone={clean_phone}&text={encoded_message}"
-                    whatsapp_app_url = f"whatsapp://send?phone={clean_phone}&text={encoded_message}"
+                    whatsapp_app_url = f"https://wa.me/{clean_phone}?text={encoded_message}"
                     
                     st.markdown(
                         f'<button data-whatsapp-url="{whatsapp_web_url}" class="whatsapp-btn whatsapp-action-btn" style="width:100%; margin-bottom:8px;">💬 WhatsApp Web</button>'

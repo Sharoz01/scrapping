@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
+import { open as tauriOpen } from "@tauri-apps/plugin-shell";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "https://scrapping-phi.vercel.app";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("scrape");
@@ -323,7 +324,7 @@ export default function App() {
   };
 
   // Helper to trigger WhatsApp tabs
-  const handleWhatsAppAction = (lead, type, proposal) => {
+  const handleWhatsAppAction = async (lead, type, proposal) => {
     if (!lead.phone) return;
 
     // Clean phone number
@@ -332,9 +333,12 @@ export default function App() {
       cleanPhone = "92" + cleanPhone.substring(1);
     }
 
-    const encodedMsg = encodeURIComponent(proposal || lead.proposal);
+    const messageText = proposal || lead.proposal;
+    const encodedMsg = encodeURIComponent(messageText);
     const webUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedMsg}`;
-    const appUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMsg}`;
+    
+    // Use wa.me URL format
+    const appUrl = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
 
     if (type === "web") {
       // Reuse Tab logic
@@ -347,7 +351,28 @@ export default function App() {
         window.whatsappWindow = window.open(webUrl, "whatsapp_tab");
       }
     } else {
-      window.location.href = appUrl;
+      // Open using Tauri shell open command if running in Tauri, otherwise fallback to anchor link
+      const isTauri = typeof window !== "undefined" && (window.__TAURI_INTERNALS__ !== undefined || window.__TAURI__ !== undefined);
+      if (isTauri) {
+        try {
+          await tauriOpen(appUrl);
+        } catch (err) {
+          console.error("Failed to open WhatsApp via Tauri shell:", err);
+          const link = document.createElement("a");
+          link.href = appUrl;
+          link.target = "_blank";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      } else {
+        const link = document.createElement("a");
+        link.href = appUrl;
+        link.target = "_blank";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
     }
   };
 
@@ -946,9 +971,9 @@ function LeadCard({ lead, onUpdateStatus, onUpdateProposal, onDelete, onWhatsApp
               </button>
               <button
                 className="btn whatsapp-btn-desktop"
-                onClick={() => onWhatsApp(lead, "desktop", localProposal)}
+                onClick={() => onWhatsApp(lead, "app", localProposal)}
               >
-                📱 WhatsApp Desktop
+                📱 WhatsApp App
               </button>
             </>
           ) : (
