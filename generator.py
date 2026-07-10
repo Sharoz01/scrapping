@@ -35,9 +35,24 @@ def extract_location(address):
         return parts[-1]
     return parts[0] if parts else "your area"
 
+def extract_category_from_query(query, default_category):
+    if not query:
+        return default_category
+    query_lower = query.strip().lower()
+    if " in " in query_lower:
+        return query_lower.split(" in ")[0].strip()
+    if " near " in query_lower:
+        return query_lower.split(" near ")[0].strip()
+    return query_lower
+
 def generate_templated_proposal(lead, template):
     name = lead.get('name', 'Business Owner')
     category = lead.get('category', 'business')
+    query = lead.get('query', '')
+    
+    if category.lower() in ["local business", "business"]:
+        category = extract_category_from_query(query, category)
+        
     phone = lead.get('phone', '')
     address = lead.get('address', '')
     location = extract_location(address)
@@ -59,6 +74,11 @@ def generate_templated_proposal(lead, template):
 def generate_ai_proposal(lead, api_key, provider="Gemini", language="English"):
     name = lead.get('name', 'Business Owner')
     category = lead.get('category', 'business')
+    query = lead.get('query', '')
+    
+    if category.lower() in ["local business", "business"]:
+        category = extract_category_from_query(query, category)
+        
     address = lead.get('address', '')
     location = extract_location(address)
     

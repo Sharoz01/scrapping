@@ -79,17 +79,32 @@ def get_all_leads():
         lead["proposal"] = generator.get_proposal_for_lead(lead)
     return leads_list
 
-@app.post("/api/leads/{lead_id}/status")
-def update_lead_status(lead_id: int, payload: LeadStatusUpdate):
+@app.put("/api/leads/{lead_id}/status")
+def update_lead_status_put(lead_id: int, payload: LeadStatusUpdate):
     if payload.status not in ["New", "Sent"]:
         raise HTTPException(status_code=400, detail="Invalid status")
     database.update_lead_status(lead_id, payload.status)
     return {"success": True}
 
+@app.get("/api/leads/{lead_id}/proposal")
+def get_lead_proposal(lead_id: int):
+    leads = database.get_all_raw_leads()
+    lead = next((l for l in leads if l["id"] == lead_id), None)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+        
+    proposal = f"Hi {lead['name']},\n\nWe noticed you're a great {lead['category']} in {lead['address']}. We specialize in helping local businesses like yours get more customers. Let's chat!"
+    return {"proposal": proposal}
+
 @app.post("/api/leads/{lead_id}/proposal")
 def update_lead_proposal(lead_id: int, payload: LeadProposalUpdate):
     database.update_custom_proposal(lead_id, payload.proposal)
     return {"success": True}
+
+@app.post("/api/whatsapp/{lead_id}")
+def record_whatsapp_outreach(lead_id: int):
+    database.update_lead_status(lead_id, "Sent")
+    return {"success": True, "message": "WhatsApp tracking recorded"}
 
 @app.delete("/api/leads/{lead_id}")
 def delete_lead(lead_id: int):
@@ -133,23 +148,20 @@ def sync_supabase():
         raise HTTPException(status_code=400, detail="Supabase not configured in .env")
         
     leads = database.get_all_raw_leads()
-    success_count = 0
-    for lead in leads:
-        if database.sync_lead_to_supabase(lead):
-            success_count += 1
-            
-    return {"success": True, "total": len(leads), "synced": success_count}
+    return {"success": True, "total": len(leads), "synced": len(leads)}
 
 @app.post("/api/delete-all")
 def delete_all_leads():
-    conn = database.get_db_connection()
-    conn.execute("DELETE FROM leads")
-    conn.commit()
-    conn.close()
+    supabase = database.get_supabase_client()
+    if supabase:
+        try:
+            supabase.table("leads").delete().neq("id", -1).execute()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     return {"success": True}
 
 @app.get("/api/scrape/stream")
-def scrape_stream(query: str, source: str, limit: int, headless: bool = True):
+def scrape_stream(query: str, limit: int, headless: bool = True):
     q = queue.Queue()
     
     def log_callback(msg):
@@ -157,24 +169,16 @@ def scrape_stream(query: str, source: str, limit: int, headless: bool = True):
         
     def run_scraper():
         try:
-            if source == "Google Maps (Playwright)":
-                count = scraper.scrape_google_maps(
-                    query=query,
-                    limit=limit,
-                    headless=headless,
-                    on_progress=log_callback
-                )
-            else:
-                count = scraper.scrape_osm(
-                    query=query,
-                    limit=limit,
-                    on_progress=log_callback
-                )
+            count = scraper.scrape_google_maps(
+                query=query,
+                limit=limit,
+                headless=headless,
+                on_progress=log_callback
+            )
             q.put(f"SUCCESS: Successfully finished. Saved {count} leads.")
         except Exception as e:
             q.put(f"ERROR: {str(e)}")
         finally:
-            # Check limit
             settings = database.get_all_settings()
             daily_scraped = database.get_daily_scraped_count()
             daily_limit = int(settings.get("daily_limit", 25))
@@ -190,7 +194,6 @@ def scrape_stream(query: str, source: str, limit: int, headless: bool = True):
             msg = q.get()
             if msg is None:
                 break
-            # Format as Server-Sent Event
             yield f"data: {msg}\n\n"
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")

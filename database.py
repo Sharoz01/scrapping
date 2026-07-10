@@ -79,8 +79,7 @@ def insert_lead(name, address, phone, website, category, query, google_maps_url=
         cleaned = website.strip().lower()
         if cleaned not in ('none', 'null', ''):
             return None
-    if not phone or phone.strip().lower() in ('none', 'null', '', 'n/a'):
-        return None
+    # Phone requirement removed for OSM
 
     supabase = get_supabase_client()
     if not supabase:
