@@ -1,0 +1,10 @@
+.venv
+__pycache__
+frontend
+leads.db
+app.py
+logo.png
+run.py
+run_react.py
+dev-requirements.txt
+curl_output.json
