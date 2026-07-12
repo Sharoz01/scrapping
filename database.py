@@ -74,11 +74,7 @@ def get_all_settings():
     except:
         return {}
 
-def insert_lead(name, address, phone, website, category, query, google_maps_url=None):
-    if website:
-        cleaned = website.strip().lower()
-        if cleaned not in ('none', 'null', ''):
-            return None
+def insert_lead(name, address, phone, website, category, query, google_maps_url=None, email=None):
     # Phone requirement removed for OSM
 
     supabase = get_supabase_client()
@@ -95,13 +91,27 @@ def insert_lead(name, address, phone, website, category, query, google_maps_url=
             "google_maps_url": google_maps_url,
             "message_status": "New",
             "sent_timestamp": None,
-            "custom_proposal": None
+            "custom_proposal": None,
+            "email": email
         }
         result = supabase.table("leads").upsert(data, on_conflict="google_maps_url").execute()
         if result.data:
-            return result.data[0].get('id')
+            return result.data[0]
     except Exception as e:
-        print(f"Insert lead error: {e}")
+        # Fallback if email column doesn't exist yet
+        err_msg = str(e).lower()
+        if "column" in err_msg or "email" in err_msg or "schema cache" in err_msg:
+            try:
+                print(f"Insert lead with email failed ({e}). Retrying without email column...")
+                data_no_email = data.copy()
+                data_no_email.pop("email", None)
+                result = supabase.table("leads").upsert(data_no_email, on_conflict="google_maps_url").execute()
+                if result.data:
+                    return result.data[0]
+            except Exception as retry_err:
+                print(f"Insert lead fallback retry error: {retry_err}")
+        else:
+            print(f"Insert lead error: {e}")
     return None
 
 def lead_exists(name, address):

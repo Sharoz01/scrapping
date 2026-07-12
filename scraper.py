@@ -2,23 +2,161 @@ import os
 import time
 import random
 import urllib.parse
+import re
 import requests
 import database
 
-def check_lead_eligibility(name, address, phone, website):
-    # Enforce quality filters: Must NOT have a website AND must HAVE a phone number
+def check_lead_eligibility(name, address, phone, email, website):
+    # Enforce quality filters:
+    # 1. Website MUST be empty/null (required)
     if website:
         cleaned_website = website.strip().lower()
         if cleaned_website not in ('none', 'null', ''):
             return False, f"has website: {website}"
             
-    if not phone or phone.strip().lower() in ('none', 'null', '', 'n/a'):
-        return False, "no phone number found"
+    # 2. Must have AT LEAST ONE of: phone OR email
+    has_phone = phone and phone.strip().lower() not in ('none', 'null', '', 'n/a')
+    has_email = email and email.strip().lower() not in ('none', 'null', '')
+    
+    if not has_phone and not has_email:
+        return False, "neither phone nor email found"
         
     if database.lead_exists(name, address):
         return False, "already exists in database"
         
     return True, ""
+
+def extract_email_from_text(text):
+    if not text:
+        return None
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    emails = re.findall(email_pattern, text)
+    for email in emails:
+        email_clean = email.strip().strip('.')
+        email_lower = email_clean.lower()
+        
+        # Exclude common false positives
+        invalid_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js']
+        invalid_domains = ['example.com', 'sentry.io', 'w3.org', 'bootstrap.com', 'jquery.com', 'google.com', 'googleapis.com']
+        
+        if any(email_lower.endswith(ext) for ext in invalid_extensions):
+            continue
+        if any(domain in email_lower for domain in invalid_domains):
+            continue
+            
+        return email_clean
+    return None
+
+def extract_email_from_website(context, url, on_progress):
+    if not url or url.strip().lower() in ('none', 'null', ''):
+        return None
+    if not url.startswith('http://') and not url.startswith('https://'):
+        url = 'http://' + url
+
+    on_progress(f"Scanning website: {url}...")
+    site_page = None
+    try:
+        site_page = context.new_page()
+        site_page.set_default_timeout(15000)
+        site_page.set_default_navigation_timeout(15000)
+        
+        # Open website homepage
+        site_page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        site_page.wait_for_timeout(2000)
+        
+        # Check mailto: links
+        mailto_el = site_page.locator('a[href^="mailto:"]')
+        if mailto_el.count() > 0:
+            href = mailto_el.first.get_attribute('href')
+            if href:
+                email = href.replace('mailto:', '').split('?')[0].strip()
+                if email:
+                    on_progress(f"Found email in mailto link: {email}")
+                    return email
+                    
+        # Check homepage text content
+        body_text = site_page.locator('body').inner_text()
+        email = extract_email_from_text(body_text)
+        if email:
+            on_progress(f"Found email in page text: {email}")
+            return email
+            
+        # Look for contact pages
+        contact_links = site_page.locator('a[href*="contact"], a[href*="Contact"]').all()
+        contact_urls = []
+        for link in contact_links:
+            try:
+                href = link.get_attribute('href')
+                if href:
+                    resolved_url = urllib.parse.urljoin(url, href)
+                    if resolved_url not in contact_urls:
+                        contact_urls.append(resolved_url)
+            except Exception:
+                continue
+                
+        # Visit contact page
+        for contact_url in contact_urls[:2]:
+            try:
+                on_progress(f"Scanning contact page: {contact_url}...")
+                site_page.goto(contact_url, wait_until="domcontentloaded", timeout=10000)
+                site_page.wait_for_timeout(1500)
+                
+                # Check mailto links on contact page
+                mailto_el = site_page.locator('a[href^="mailto:"]')
+                if mailto_el.count() > 0:
+                    href = mailto_el.first.get_attribute('href')
+                    if href:
+                        email = href.replace('mailto:', '').split('?')[0].strip()
+                        if email:
+                            on_progress(f"Found email on contact page mailto: {email}")
+                            return email
+                            
+                # Check text content of contact page
+                body_text = site_page.locator('body').inner_text()
+                email = extract_email_from_text(body_text)
+                if email:
+                    on_progress(f"Found email on contact page text: {email}")
+                    return email
+            except Exception as ce:
+                on_progress(f"Could not load contact page {contact_url}: {ce}")
+                
+    except Exception as e:
+        on_progress(f"Could not scan website {url}: {e}")
+    finally:
+        if site_page:
+            try:
+                site_page.close()
+            except Exception:
+                pass
+    return None
+
+def find_email_from_website_requests(url):
+    if not url or url.strip().lower() in ('none', 'null', ''):
+        return None
+    if not url.startswith('http://') and not url.startswith('https://'):
+        url = 'http://' + url
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            email = extract_email_from_text(resp.text)
+            if email:
+                return email
+            # Simple fallback search for Contact page links
+            links = re.findall(r'href=["\']([^"\']*(?:contact|Contact)[^"\']*)["\']', resp.text)
+            for link in links[:2]:
+                contact_url = urllib.parse.urljoin(url, link)
+                try:
+                    c_resp = requests.get(contact_url, headers=headers, timeout=8)
+                    if c_resp.status_code == 200:
+                        email = extract_email_from_text(c_resp.text)
+                        if email:
+                            return email
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return None
 
 # OSM category tags mapping
 OSM_TAGS = {
@@ -47,6 +185,14 @@ OSM_TAGS = {
     'pharmacies': ('amenity', 'pharmacy'),
     'supermarket': ('shop', 'supermarket'),
     'supermarkets': ('shop', 'supermarket'),
+    'visa agent': ('office', 'visa'),
+    'visa agents': ('office', 'visa'),
+    'visa agency': ('office', 'visa'),
+    'visa agencies': ('office', 'visa'),
+    'travel agent': ('shop', 'travel_agency'),
+    'travel agents': ('shop', 'travel_agency'),
+    'travel agency': ('shop', 'travel_agency'),
+    'travel agencies': ('shop', 'travel_agency'),
 }
 
 def extract_phone_number(page):
@@ -106,56 +252,145 @@ def parse_query(query):
         return category.strip(), location.strip()
     return query, ""
 
-def geocode_location(location_name):
+def geocode_location(location_name, on_progress):
     url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(location_name)}&format=json&limit=1"
     headers = {'User-Agent': 'LeadGeneratorApp/1.0 (hf@scrapping.local)'}
     try:
         resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data:
-                return float(data[0]['lat']), float(data[0]['lon'])
+        if resp.status_code != 200:
+            on_progress(f"Geocoding server returned HTTP status: {resp.status_code}")
+            return None, None, None, None
+        data = resp.json()
+        if data:
+            lat = float(data[0]['lat'])
+            lon = float(data[0]['lon'])
+            bbox = data[0].get('boundingbox')
+            if bbox and len(bbox) == 4:
+                bbox = [float(x) for x in bbox]
+            
+            osm_id = data[0].get('osm_id')
+            osm_type = data[0].get('osm_type')
+            area_id = None
+            if osm_id and osm_type:
+                if osm_type == 'relation':
+                    area_id = 3600000000 + int(osm_id)
+                elif osm_type == 'way':
+                    area_id = 2400000000 + int(osm_id)
+            return lat, lon, bbox, area_id
     except Exception as e:
-        print(f"OSM Nominatim Geocoding error: {e}")
-    return None, None
+        on_progress(f"Geocoding exception: {str(e)}")
+    return None, None, None, None
+
+def query_overpass(query_ql, on_progress):
+    urls = [
+        "https://overpass-api.de/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://z.overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter"
+    ]
+    
+    headers = {'User-Agent': 'LeadForgeApp/1.0 (hf@scrapping.local)'}
+    
+    for url in urls:
+        try:
+            on_progress(f"Sending query to Overpass API mirror: {url}...")
+            resp = requests.post(url, data={'data': query_ql}, headers=headers, timeout=60)
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code == 429:
+                on_progress(f"Rate limit hit on {url}, trying next mirror...")
+            else:
+                on_progress(f"Error status code {resp.status_code} from {url}, trying next mirror...")
+        except requests.exceptions.Timeout:
+            on_progress(f"Timeout on mirror {url} (60s limit), trying next mirror...")
+        except Exception as e:
+            on_progress(f"Error connecting to mirror {url}: {str(e)}, trying next mirror...")
+            
+    return None
 
 def scrape_osm(query, limit, on_progress):
     on_progress(f"Starting OpenStreetMap scraping for query: '{query}'...")
     category, location = parse_query(query)
     if not location:
         on_progress("Error: OSM scraping requires a location in the query (e.g. 'restaurants in Lahore').")
-        return 0
+        return []
         
-    lat, lon = geocode_location(location)
+    lat, lon, bbox, area_id = geocode_location(location, on_progress)
     if not lat or not lon:
         on_progress(f"Error: Could not geocode location '{location}' using Nominatim.")
-        return 0
+        return []
         
     on_progress(f"Geocoded '{location}' to coordinates: ({lat:.4f}, {lon:.4f})")
     
     # Map category
-    tag_key, tag_val = OSM_TAGS.get(category, ('amenity', category))
-    on_progress(f"Searching OSM tags: [{tag_key}={tag_val}] within 10km radius...")
+    tag_key, tag_val = OSM_TAGS.get(category, (None, None))
     
-    overpass_url = "https://overpass-api.de/api/interpreter"
+    if area_id:
+        on_progress(f"Searching OSM tags inside area ID: {area_id}...")
+        overpass_bbox = None
+    elif bbox:
+        overpass_bbox = f"{bbox[0]},{bbox[2]},{bbox[1]},{bbox[3]}"
+        on_progress(f"Searching OSM tags within area boundary: {overpass_bbox}...")
+    else:
+        overpass_bbox = None
+        on_progress(f"Searching OSM tags within 10km radius of ({lat:.4f}, {lon:.4f})...")
+
+    if tag_key and tag_val:
+        if area_id:
+            query_parts = f"""
+              node(area:{area_id})["{tag_key}"="{tag_val}"];
+              way(area:{area_id})["{tag_key}"="{tag_val}"];
+              relation(area:{area_id})["{tag_key}"="{tag_val}"];
+            """
+        elif overpass_bbox:
+            query_parts = f"""
+              node["{tag_key}"="{tag_val}"]({overpass_bbox});
+              way["{tag_key}"="{tag_val}"]({overpass_bbox});
+              relation["{tag_key}"="{tag_val}"]({overpass_bbox});
+            """
+        else:
+            query_parts = f"""
+              node["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
+              way["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
+              relation["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
+            """
+    else:
+        # Fallback multi-tag search for unmapped categories
+        cat_underscored = category.replace(" ", "_")
+        search_terms = list(set([category, cat_underscored]))
+        
+        clauses = []
+        for term in search_terms:
+            for key in ["amenity", "office", "shop", "craft"]:
+                if area_id:
+                    clauses.append(f'node(area:{area_id})["{key}"="{term}"];')
+                    clauses.append(f'way(area:{area_id})["{key}"="{term}"];')
+                    clauses.append(f'relation(area:{area_id})["{key}"="{term}"];')
+                elif overpass_bbox:
+                    clauses.append(f'node["{key}"="{term}"]({overpass_bbox});')
+                    clauses.append(f'way["{key}"="{term}"]({overpass_bbox});')
+                    clauses.append(f'relation["{key}"="{term}"]({overpass_bbox});')
+                else:
+                    clauses.append(f'node["{key}"="{term}"](around:10000, {lat}, {lon});')
+                    clauses.append(f'way["{key}"="{term}"](around:10000, {lat}, {lon});')
+                    clauses.append(f'relation["{key}"="{term}"](around:10000, {lat}, {lon});')
+        query_parts = "\n".join(clauses)
+
+    out_limit = max(150, limit * 10)
     query_ql = f"""
-    [out:json];
+    [out:json][timeout:60];
     (
-      node["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
-      way["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
-      relation["{tag_key}"="{tag_val}"](around:10000, {lat}, {lon});
+      {query_parts}
     );
-    out center;
+    out center {out_limit};
     """
     
     try:
-        headers = {'User-Agent': 'LeadForgeApp/1.0 (hf@scrapping.local)'}
-        resp = requests.post(overpass_url, data={'data': query_ql}, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            on_progress(f"Error from Overpass API (status code {resp.status_code})")
-            return 0
+        data = query_overpass(query_ql, on_progress)
+        if not data:
+            on_progress("Error: All Overpass API mirrors failed or timed out. If you are searching in a very large region (like an entire country), please try narrowing down your query to a city or a more specific area (e.g., 'salons in London, UK' instead of 'salons in UK').")
+            return []
         
-        data = resp.json()
         elements = data.get('elements', [])
         on_progress(f"Found {len(elements)} total matches in region. Processing...")
         
@@ -164,9 +399,10 @@ def scrape_osm(query, limit, on_progress):
         remaining = daily_limit - daily_scraped
         if remaining <= 0:
             on_progress(f"Daily limit of {daily_limit} already reached today. Stopping.")
-            return 0
+            return []
             
         saved_count = 0
+        saved_leads = []
         for el in elements:
             if saved_count >= limit or saved_count >= remaining:
                 break
@@ -178,6 +414,7 @@ def scrape_osm(query, limit, on_progress):
                 
             website = tags.get('website') or tags.get('contact:website')
             phone = tags.get('phone') or tags.get('contact:phone') or tags.get('contact:mobile')
+            email = tags.get('email') or tags.get('contact:email')
             
             # Form address
             street = tags.get('addr:street', '')
@@ -187,34 +424,47 @@ def scrape_osm(query, limit, on_progress):
             addr_parts = [p for p in [housenumber, street, suburb, city] if p]
             address = ", ".join(addr_parts) if addr_parts else location.capitalize()
             
+            # Check website early to skip if not empty
+            if website:
+                cleaned_website = website.strip().lower()
+                if cleaned_website not in ('none', 'null', ''):
+                    on_progress(f"Skipped: **{name}** (has website: {website})")
+                    continue
+
+            # Try to visit business website if email not in tags and website is listed
+            if not email and website:
+                email = find_email_from_website_requests(website)
+                
             # Check unique name & address and quality criteria
-            eligible, reason = check_lead_eligibility(name, address, phone, website)
+            eligible, reason = check_lead_eligibility(name, address, phone, email, website)
             if not eligible:
                 on_progress(f"Skipped: **{name}** ({reason})")
                 continue
                 
             # SQLite insertion
             osm_url = f"https://www.openstreetmap.org/{el.get('type')}/{el.get('id')}"
-            db_id = database.insert_lead(
+            db_lead = database.insert_lead(
                 name=name,
                 address=address,
                 phone=phone,
                 website=website,
                 category=category.capitalize(),
                 query=query,
-                google_maps_url=osm_url
+                google_maps_url=osm_url,
+                email=email
             )
             
-            if db_id:
+            if db_lead:
                 saved_count += 1
-                on_progress(f"[{saved_count}] Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'}")
+                saved_leads.append(db_lead)
+                on_progress(f"[{saved_count}] Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'} | Email: {email or 'None'}")
                 
         on_progress(f"OSM scraping complete. Saved {saved_count} new leads.")
-        return saved_count
+        return saved_leads
         
     except Exception as e:
         on_progress(f"Error during OSM scraping: {str(e)}")
-        return 0
+        return []
 
 
 def scrape_google_maps(query, limit, headless, on_progress):
@@ -313,7 +563,35 @@ def scrape_google_maps(query, limit, headless, on_progress):
                     if category_el.count() > 0:
                         category = category_el.first.inner_text().strip()
                         
-                eligible, reason = check_lead_eligibility(name, address, phone, website)
+                # Check website early to skip if not empty
+                if website:
+                    cleaned_website = website.strip().lower()
+                    if cleaned_website not in ('none', 'null', ''):
+                        on_progress(f"Skipped: **{name}** (has website: {website})")
+                        browser.close()
+                        return 0
+
+                # Try to extract email
+                email = None
+                try:
+                    # 1. Check Google Maps page for mailto
+                    mailto_el = page.locator('a[href^="mailto:"]')
+                    if mailto_el.count() > 0:
+                        href = mailto_el.first.get_attribute('href')
+                        if href:
+                            email = href.replace('mailto:', '').split('?')[0].strip()
+                    # 2. Check page body text
+                    if not email:
+                        body_text = page.locator('body').inner_text()
+                        email = extract_email_from_text(body_text)
+                except Exception as e:
+                    on_progress(f"Error checking Maps listing for email: {e}")
+
+                # 3. Check website if listed and email not found yet
+                if not email and website:
+                    email = extract_email_from_website(context, website, on_progress)
+                    
+                eligible, reason = check_lead_eligibility(name, address, phone, email, website)
                 if not eligible:
                     on_progress(f"Skipped: **{name}** ({reason})")
                     browser.close()
@@ -326,10 +604,11 @@ def scrape_google_maps(query, limit, headless, on_progress):
                     website=website,
                     category=category,
                     query=query,
-                    google_maps_url=page.url
+                    google_maps_url=page.url,
+                    email=email
                 )
                 if db_id:
-                    on_progress(f"Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'}")
+                    on_progress(f"Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'} | Email: {email or 'None'}")
                     browser.close()
                     return 1
                 else:
@@ -445,11 +724,38 @@ def scrape_google_maps(query, limit, headless, on_progress):
                 if not name:
                     continue
                     
-                eligible, reason = check_lead_eligibility(name, address, phone, website)
+                # Check website early to skip if not empty
+                if website:
+                    cleaned_website = website.strip().lower()
+                    if cleaned_website not in ('none', 'null', ''):
+                        on_progress(f"Skipped: **{name}** (has website: {website})")
+                        continue
+
+                # Try to extract email
+                email = None
+                try:
+                    # 1. Check Google Maps page for mailto
+                    mailto_el = page.locator('a[href^="mailto:"]')
+                    if mailto_el.count() > 0:
+                        href = mailto_el.first.get_attribute('href')
+                        if href:
+                            email = href.replace('mailto:', '').split('?')[0].strip()
+                    # 2. Check page body text
+                    if not email:
+                        body_text = page.locator('body').inner_text()
+                        email = extract_email_from_text(body_text)
+                except Exception as e:
+                    on_progress(f"Error checking Maps listing for email: {e}")
+
+                # 3. Check website if listed and email not found yet
+                if not email and website:
+                    email = extract_email_from_website(context, website, on_progress)
+
+                eligible, reason = check_lead_eligibility(name, address, phone, email, website)
                 if not eligible:
                     on_progress(f"Skipped: **{name}** ({reason})")
                     continue
-                    
+
                 db_id = database.insert_lead(
                     name=name,
                     address=address,
@@ -457,12 +763,13 @@ def scrape_google_maps(query, limit, headless, on_progress):
                     website=website,
                     category=category,
                     query=query,
-                    google_maps_url=url
+                    google_maps_url=url,
+                    email=email
                 )
                 
                 if db_id:
                     saved_count += 1
-                    on_progress(f"[{saved_count}] Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'}")
+                    on_progress(f"[{saved_count}] Saved: **{name}** | Phone: {phone or 'N/A'} | Website: {website or 'None'} | Email: {email or 'None'}")
                     
             except Exception as e:
                 on_progress(f"Error scraping details for business {i+1}: {str(e)}")

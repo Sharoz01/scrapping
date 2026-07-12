@@ -297,11 +297,12 @@ with tab_scrape:
                         on_progress=log_callback
                     )
                 else:
-                    count = scraper.scrape_osm(
+                    res_osm = scraper.scrape_osm(
                         query=search_query,
                         limit=scrape_limit,
                         on_progress=log_callback
                     )
+                    count = len(res_osm) if isinstance(res_osm, list) else res_osm
                 
                 if count > 0:
                     st.success(f"🎉 Scraping complete! Successfully imported {count} new leads without websites.")

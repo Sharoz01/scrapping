@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import { open as tauriOpen } from "@tauri-apps/plugin-shell";
+import { open } from "@tauri-apps/plugin-shell";
 
-const API_BASE = import.meta.env.VITE_API_URL || "https://scrapping-phi.vercel.app";
+const API_BASE = import.meta.env.VITE_API_URL || 
+  (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? "http://localhost:8000"
+    : "https://scrapping-phi.vercel.app");
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("scrape");
@@ -49,11 +52,10 @@ export default function App() {
 
   // Scrape states
   const [searchQuery, setSearchQuery] = useState("");
-  const [scrapeSource, setScrapeSource] = useState("Google Maps (Playwright)");
   const [scrapeLimit, setScrapeLimit] = useState(10);
-  const [headlessMode, setHeadlessMode] = useState(true);
   const [scrapingInProgress, setScrapingInProgress] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [scrapedLeads, setScrapedLeads] = useState([]);
 
   // Queue states
   const [searchKW, setSearchKW] = useState("");
@@ -145,7 +147,6 @@ export default function App() {
           proposal_template: data.proposal_template || "",
           proposal_template_urdu: data.proposal_template_urdu || "",
         });
-        setHeadlessMode(data.playwright_headless === "True");
       }
     } catch (e) {
       console.error("Error fetching settings:", e);
@@ -284,43 +285,42 @@ export default function App() {
     }
   };
 
-  const handleStartScrape = () => {
+  const handleStartScrape = async () => {
     if (!searchQuery) {
       showToast("Please enter a search query.", "error");
       return;
     }
 
     setScrapingInProgress(true);
-    setLogs(["[SYSTEM] Launching scraper connection..."]);
+    setLogs(["[SYSTEM] Launching scraper connection on backend..."]);
+    setScrapedLeads([]);
 
-    const url = `${API_BASE}/api/scrape/stream?query=${encodeURIComponent(searchQuery)}&limit=${scrapeLimit}&headless=${headlessMode}`;
-    const eventSource = new EventSource(url);
+    try {
+      const response = await fetch(`${API_BASE}/api/scrape`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: searchQuery, limit: scrapeLimit || 10 })
+      });
 
-    eventSource.onmessage = (event) => {
-      const msg = event.data;
-      setLogs((prev) => [...prev, msg]);
-
-      if (msg.startsWith("SUCCESS:") || msg.startsWith("ERROR:")) {
-        eventSource.close();
-        setScrapingInProgress(false);
-        fetchStats();
-        fetchLeads();
-        if (msg.startsWith("SUCCESS:")) {
-          showToast("Scraping completed!", "success");
-        } else {
-          showToast("Scraper halted with errors.", "error");
-        }
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error: ${response.status}`);
       }
-    };
 
-    eventSource.onerror = (err) => {
-      console.error("SSE Error:", err);
-      setLogs((prev) => [...prev, "[SYSTEM ERROR] Lost connection to scraper process."]);
-      eventSource.close();
+      const data = await response.json();
+      setLogs(data.logs || [`[SYSTEM] Scraper completed. Saved ${data.count} new leads.`]);
+      setScrapedLeads(data.leads || []);
+      showToast(`Scraped ${data.count} leads successfully!`, "success");
+      
+      await fetchStats();
+      await fetchLeads();
+    } catch (err) {
+      console.error(err);
+      setLogs([`[SYSTEM ERROR] Failed to scrape: ${err.message}`]);
+      showToast("Scraper halted with errors: " + err.message, "error");
+    } finally {
       setScrapingInProgress(false);
-      fetchStats();
-      fetchLeads();
-    };
+    }
   };
 
   // Helper to trigger WhatsApp tabs
@@ -334,45 +334,19 @@ export default function App() {
     }
 
     const messageText = proposal || lead.proposal;
-    const encodedMsg = encodeURIComponent(messageText);
-    const webUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedMsg}`;
-    
-    // Use wa.me URL format
-    const appUrl = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
+    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`;
 
-    if (type === "web") {
-      // Reuse Tab logic
-      if (window.whatsappWindow && !window.whatsappWindow.closed) {
-        window.whatsappWindow.location.href = webUrl;
-        try {
-          window.whatsappWindow.focus();
-        } catch (e) { }
-      } else {
-        window.whatsappWindow = window.open(webUrl, "whatsapp_tab");
-      }
-    } else {
-      // Open using Tauri shell open command if running in Tauri, otherwise fallback to anchor link
-      const isTauri = typeof window !== "undefined" && (window.__TAURI_INTERNALS__ !== undefined || window.__TAURI__ !== undefined);
-      if (isTauri) {
-        try {
-          await tauriOpen(appUrl);
-        } catch (err) {
-          console.error("Failed to open WhatsApp via Tauri shell:", err);
-          const link = document.createElement("a");
-          link.href = appUrl;
-          link.target = "_blank";
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
-      } else {
-        const link = document.createElement("a");
-        link.href = appUrl;
-        link.target = "_blank";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
+    try {
+      await open(url);
+    } catch (err) {
+      console.error("Failed to open WhatsApp via Tauri shell:", err);
+      // Fallback
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -385,11 +359,12 @@ export default function App() {
     }
 
     if (format === "csv") {
-      const headers = ["ID", "Name", "Phone", "Website", "Address", "Category", "Query", "Scraped Date", "Outreach Status"];
+      const headers = ["ID", "Name", "Phone", "Email", "Website", "Address", "Category", "Query", "Scraped Date", "Outreach Status"];
       const rows = allLeads.map((l) => [
         l.id,
         `"${(l.name || "").replace(/"/g, '""')}"`,
         l.phone || "",
+        l.email || "",
         l.website || "",
         `"${(l.address || "").replace(/"/g, '""')}"`,
         l.category || "",
@@ -578,19 +553,6 @@ export default function App() {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Scraping Source</label>
-                    <select
-                      className="form-select"
-                      value={scrapeSource}
-                      onChange={(e) => setScrapeSource(e.target.value)}
-                      disabled={scrapingInProgress}
-                    >
-                      <option>Google Maps (Playwright)</option>
-                      <option>OpenStreetMap (Overpass API)</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group">
                     <label className="form-label">Max results for this run ({scrapeLimit})</label>
                     <input
                       type="range"
@@ -600,19 +562,6 @@ export default function App() {
                       onChange={(e) => setScrapeLimit(parseInt(e.target.value))}
                       disabled={scrapingInProgress}
                     />
-                  </div>
-
-                  <div className="form-group" style={{ display: 'none' }}>
-                    <div
-                      className={`toggle-wrapper ${headlessMode ? "active" : ""}`}
-                      onClick={() => !scrapingInProgress && setHeadlessMode(!headlessMode)}
-                    >
-                      <div className="toggle-switch"></div>
-                      <div>
-                        <div className="form-label" style={{ marginBottom: 0 }}>Run browser in background (Headless)</div>
-                        <div className="toggle-label-desc">Google Maps browser window will open if disabled.</div>
-                      </div>
-                    </div>
                   </div>
                 </div>
 
@@ -624,22 +573,28 @@ export default function App() {
                   {scrapingInProgress ? "⏳ Scraping In Progress..." : timerStr ? `⛔ Restores in ${timerStr}` : "🚀 Run Scrape"}
                 </button>
 
-                {/* Terminal Logger Output */}
-                <div className="terminal-card">
-                  <div className="terminal-header">
-                    <div className="terminal-buttons">
-                      <span className="terminal-dot red"></span>
-                      <span className="terminal-dot yellow"></span>
-                      <span className="terminal-dot green"></span>
-                    </div>
-                    <span className="terminal-title">Scraper System Console Log</span>
-                    <div></div>
+                {/* Loading Spinner */}
+                {scrapingInProgress && (
+                  <div className="spinner-container">
+                    <div className="spinner"></div>
+                    <div className="spinner-text">Scraping business leads from backend API...</div>
                   </div>
-                  <div className="terminal-body">
-                    {logs.length === 0 ? (
-                      <p className="terminal-empty">Logs will start displaying here once you run the scrape execution.</p>
-                    ) : (
-                      logs.map((log, idx) => {
+                )}
+
+                {/* Terminal Logger Output */}
+                {!scrapingInProgress && logs.length > 0 && (
+                  <div className="terminal-card">
+                    <div className="terminal-header">
+                      <div className="terminal-buttons">
+                        <span className="terminal-dot red"></span>
+                        <span className="terminal-dot yellow"></span>
+                        <span className="terminal-dot green"></span>
+                      </div>
+                      <span className="terminal-title">Scraper System Console Log</span>
+                      <div></div>
+                    </div>
+                    <div className="terminal-body">
+                      {logs.map((log, idx) => {
                         const isSaved = log.includes("Saved:") && !log.includes("Skipped:");
                         return (
                           <div
@@ -652,11 +607,31 @@ export default function App() {
                             {log}
                           </div>
                         );
-                      })
-                    )}
-                    <div ref={logsEndRef} />
+                      })}
+                      <div ref={logsEndRef} />
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Results Section */}
+                {!scrapingInProgress && scrapedLeads.length > 0 && (
+                  <div style={{ marginTop: "32px" }}>
+                    <h3 className="panel-header" style={{ fontSize: "1.1rem", marginBottom: "16px" }}>Newly Scraped Leads ({scrapedLeads.length})</h3>
+                    <div className="leads-list">
+                      {scrapedLeads.map((lead) => (
+                        <LeadCard
+                          key={lead.id}
+                          lead={lead}
+                          onUpdateStatus={handleUpdateStatus}
+                          onUpdateProposal={handleUpdateProposal}
+                          onDelete={handleDeleteLead}
+                          onWhatsApp={handleWhatsAppAction}
+                          filterType="unsent"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -754,6 +729,7 @@ export default function App() {
                           <th>Name</th>
                           <th>Category</th>
                           <th>Phone</th>
+                          <th>Email</th>
                           <th>Website</th>
                           <th>Address</th>
                           <th>Scraped Date</th>
@@ -763,7 +739,7 @@ export default function App() {
                       <tbody>
                         {filteredAllLeads.length === 0 ? (
                           <tr>
-                            <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)" }}>
+                            <td colSpan="8" style={{ textAlign: "center", color: "var(--text-muted)" }}>
                               No database leads found.
                             </td>
                           </tr>
@@ -773,6 +749,7 @@ export default function App() {
                               <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>{l.name}</td>
                               <td>{l.category || "N/A"}</td>
                               <td>{l.phone || "N/A"}</td>
+                              <td>{l.email || "-"}</td>
                               <td>{l.website || "None"}</td>
                               <td>{l.address || "N/A"}</td>
                               <td>{l.scraped_date}</td>
@@ -831,18 +808,7 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div className="form-group" style={{ justifyContent: "center", alignItems: "center" }}>
-                      <div
-                        className={`toggle-wrapper ${settings.playwright_headless ? "active" : ""}`}
-                        onClick={() => setSettings({ ...settings, playwright_headless: !settings.playwright_headless })}
-                      >
-                        <div className="toggle-switch"></div>
-                        <div>
-                          <div className="form-label" style={{ marginBottom: 0 }}>Playwright Headless Browser</div>
-                          <div className="toggle-label-desc">Run chromium background scraper browser.</div>
-                        </div>
-                      </div>
-                    </div>
+
 
                     <div className="form-group" style={{ justifyContent: "center", alignItems: "center" }}>
                       <div
@@ -941,7 +907,8 @@ function LeadCard({ lead, onUpdateStatus, onUpdateProposal, onDelete, onWhatsApp
           <div className="lead-meta-info">
             <span className="meta-item">📂 {lead.category || "General"}</span>
             <span className="meta-item">📍 {lead.address || "No Address"}</span>
-            <span className="meta-item">📞 {lead.phone || "No Phone"}</span>
+            {lead.phone && <span className="meta-item">📞 {lead.phone}</span>}
+            {lead.email && <span className="meta-item">✉️ {lead.email}</span>}
             <span className="meta-item">⏱️ {lead.scraped_date}</span>
           </div>
         </div>
@@ -981,6 +948,37 @@ function LeadCard({ lead, onUpdateStatus, onUpdateProposal, onDelete, onWhatsApp
               ⚠️ Missing Phone Number
             </div>
           )}
+
+          {lead.email ? (
+            <a
+              className="btn email-btn"
+              href={`mailto:${lead.email}?subject=${encodeURIComponent("Proposal")}&body=${encodeURIComponent(localProposal || lead.proposal || "")}`}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              ✉️ Send Email
+              <span className="btn-badge-new">NEW</span>
+            </a>
+          ) : (
+            <button
+              className="btn email-btn disabled"
+              disabled
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: 0.5,
+                cursor: "not-allowed",
+                background: "linear-gradient(135deg, #4b5563 0%, #374151 100%)",
+                color: "#9ca3af",
+                boxShadow: "none"
+              }}
+            >
+              ✉️ Send Email
+              <span className="btn-badge-disabled-new">NEW</span>
+            </button>
+          )}
+
+
 
           {filterType === "unsent" ? (
             <button

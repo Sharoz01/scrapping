@@ -43,6 +43,10 @@ class SettingsUpdate(BaseModel):
     proposal_template: str
     proposal_template_urdu: str
 
+class ScrapeRequest(BaseModel):
+    query: str
+    limit: int
+
 @app.get("/api/leads")
 def get_leads(status: Optional[str] = None, search: Optional[str] = None):
     # Map friendly status to DB status
@@ -159,6 +163,43 @@ def delete_all_leads():
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     return {"success": True}
+
+@app.post("/api/scrape")
+def scrape_leads(payload: ScrapeRequest):
+    try:
+        logs_list = []
+        def log_callback(msg):
+            logs_list.append(msg)
+            
+        leads_saved = scraper.scrape_osm(
+            query=payload.query,
+            limit=payload.limit,
+            on_progress=log_callback
+        )
+        
+        # Determine the saved leads count and data
+        if isinstance(leads_saved, list):
+            count = len(leads_saved)
+            leads_data = leads_saved
+        else:
+            count = leads_saved
+            leads_data = []
+            
+        # Trigger daily limit checking in background/database
+        settings = database.get_all_settings()
+        daily_scraped = database.get_daily_scraped_count()
+        daily_limit = int(settings.get("daily_limit", 25))
+        if daily_scraped >= daily_limit and not settings.get("limit_timer_end"):
+            database.trigger_limit_timer()
+            
+        return {
+            "success": True,
+            "count": count,
+            "logs": logs_list,
+            "leads": leads_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/scrape/stream")
 def scrape_stream(query: str, limit: int, headless: bool = True):
