@@ -3,7 +3,6 @@ import queue
 import threading
 import urllib.parse
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -14,10 +13,11 @@ import generator
 
 app = FastAPI(title="Lead Gen API")
 
-# Enable CORS for frontend development
+from fastapi.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (e.g. http://localhost:5173)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
