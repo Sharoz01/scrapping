@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 
-const API_BASE = import.meta.env.VITE_API_URL || 
-  (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? "http://localhost:8000"
-    : "https://scrapping-phi.vercel.app");
+const API_BASE = import.meta.env.VITE_API_URL || "https://scrapping-phi.vercel.app";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("scrape");
@@ -340,13 +337,6 @@ export default function App() {
       await open(url);
     } catch (err) {
       console.error("Failed to open WhatsApp via Tauri shell:", err);
-      // Fallback
-      const link = document.createElement("a");
-      link.href = url;
-      link.target = "_blank";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
     }
   };
 
