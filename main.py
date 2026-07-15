@@ -83,37 +83,68 @@ def get_all_leads():
         lead["proposal"] = generator.get_proposal_for_lead(lead)
     return leads_list
 
-@app.put("/api/leads/{lead_id}/status")
-def update_lead_status_put(lead_id: int, payload: LeadStatusUpdate):
+# Status endpoints (supporting both PUT and POST, and both {id} and {lead_id})
+@app.put("/api/leads/{id}/status")
+def update_lead_status_put(id: int, payload: LeadStatusUpdate):
     if payload.status not in ["New", "Sent"]:
         raise HTTPException(status_code=400, detail="Invalid status")
-    database.update_lead_status(lead_id, payload.status)
+    database.update_lead_status(id, payload.status)
     return {"success": True}
 
-@app.get("/api/leads/{lead_id}/proposal")
-def get_lead_proposal(lead_id: int):
+@app.post("/api/leads/{id}/status")
+def update_lead_status_post(id: int, payload: LeadStatusUpdate):
+    return update_lead_status_put(id, payload)
+
+@app.put("/api/leads/{lead_id}/status")
+def update_lead_status_put_legacy(lead_id: int, payload: LeadStatusUpdate):
+    return update_lead_status_put(lead_id, payload)
+
+@app.post("/api/leads/{lead_id}/status")
+def update_lead_status_post_legacy(lead_id: int, payload: LeadStatusUpdate):
+    return update_lead_status_put(lead_id, payload)
+
+# Proposal endpoints (supporting GET and POST, and both {id} and {lead_id})
+@app.get("/api/leads/{id}/proposal")
+def get_lead_proposal(id: int):
     leads = database.get_all_raw_leads()
-    lead = next((l for l in leads if l["id"] == lead_id), None)
+    lead = next((l for l in leads if l["id"] == id), None)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
         
     proposal = f"Hi {lead['name']},\n\nWe noticed you're a great {lead['category']} in {lead['address']}. We specialize in helping local businesses like yours get more customers. Let's chat!"
     return {"proposal": proposal}
 
-@app.post("/api/leads/{lead_id}/proposal")
-def update_lead_proposal(lead_id: int, payload: LeadProposalUpdate):
-    database.update_custom_proposal(lead_id, payload.proposal)
+@app.get("/api/leads/{lead_id}/proposal")
+def get_lead_proposal_legacy(lead_id: int):
+    return get_lead_proposal(lead_id)
+
+@app.post("/api/leads/{id}/proposal")
+def update_lead_proposal(id: int, payload: LeadProposalUpdate):
+    database.update_custom_proposal(id, payload.proposal)
     return {"success": True}
 
-@app.post("/api/whatsapp/{lead_id}")
-def record_whatsapp_outreach(lead_id: int):
-    database.update_lead_status(lead_id, "Sent")
+@app.post("/api/leads/{lead_id}/proposal")
+def update_lead_proposal_legacy(lead_id: int, payload: LeadProposalUpdate):
+    return update_lead_proposal(lead_id, payload)
+
+@app.post("/api/whatsapp/{id}")
+def record_whatsapp_outreach(id: int):
+    database.update_lead_status(id, "Sent")
     return {"success": True, "message": "WhatsApp tracking recorded"}
 
-@app.delete("/api/leads/{lead_id}")
-def delete_lead(lead_id: int):
-    database.delete_lead(lead_id)
+@app.post("/api/whatsapp/{lead_id}")
+def record_whatsapp_outreach_legacy(lead_id: int):
+    return record_whatsapp_outreach(lead_id)
+
+# Delete endpoints (supporting both {id} and {lead_id})
+@app.delete("/api/leads/{id}")
+def delete_lead(id: int):
+    database.delete_lead(id)
     return {"success": True}
+
+@app.delete("/api/leads/{lead_id}")
+def delete_lead_legacy(lead_id: int):
+    return delete_lead(lead_id)
 
 @app.get("/api/stats")
 def get_stats():
