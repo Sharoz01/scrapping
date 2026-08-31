@@ -1,0 +1,17 @@
+.env
+.env.*
+.env.local
+.venv/
+__pycache__/
+*.pyc
+leads.db
+*.db
+.DS_Store
+.vscode/
+*.log
+
+# Tauri / Rust build directories
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+frontend/node_modules/
+frontend/dist/

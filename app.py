@@ -193,7 +193,7 @@ with st.sidebar:
     
     # Load settings
     settings = database.get_all_settings()
-    daily_limit = int(settings.get('daily_limit', 25))
+    daily_limit = int(settings.get('daily_limit', 1000))
     scraped_today = database.get_daily_scraped_count()
     
     # Daily Limit Metrics
@@ -249,24 +249,25 @@ with tab_scrape:
     with col2:
         scrape_source = st.selectbox(
             "Scraping Source",
-            ["Google Maps (Playwright)", "OpenStreetMap (Overpass API)"],
-            help="Google Maps uses real browser simulation. OSM is direct API, faster but might have less phone numbers."
+            ["Bing Maps 📍 (Recommended - Fast & No Blocks)", "Google Maps (Playwright)", "OpenStreetMap (Overpass API)"],
+            help="Bing Maps is fast with zero blocking. Google Maps simulates real browser. OSM is direct API."
         )
         
     col3, col4 = st.columns(2)
     with col3:
-        scrape_limit = st.slider(
-            "Max results for this run",
+        scrape_limit = st.number_input(
+            "Max results for this run (type any number)",
             min_value=1,
-            max_value=30,
-            value=10,
-            help="Limit this search execution results. Random delay (5-15s) applies between Google Maps items."
+            max_value=5000,
+            value=50,
+            step=1,
+            help="Type manually or use +/- to set exact number of leads to scrape."
         )
     with col4:
         headless_mode = st.toggle(
             "Run browser in background (Headless)",
             value=(settings.get('playwright_headless', 'True') == 'True'),
-            help="If disabled, you will see the Chrome browser window open and navigate (only for Google Maps)."
+            help="If disabled, you will see the Chrome browser window open and navigate."
         )
 
     # Scrape Button Logic
@@ -289,7 +290,14 @@ with tab_scrape:
                 log_container.code("\n".join(logs[-15:]))
                 
             try:
-                if scrape_source == "Google Maps (Playwright)":
+                if "Bing Maps" in scrape_source:
+                    count = scraper.scrape_bing_maps(
+                        query=search_query,
+                        limit=scrape_limit,
+                        headless=headless_mode,
+                        on_progress=log_callback
+                    )
+                elif "Google Maps" in scrape_source:
                     count = scraper.scrape_google_maps(
                         query=search_query,
                         limit=scrape_limit,
@@ -518,8 +526,8 @@ with tab_settings:
             form_limit = st.number_input(
                 "Daily Scrape Limit",
                 min_value=1,
-                max_value=100,
-                value=int(settings.get('daily_limit', 25)),
+                max_value=10000,
+                value=int(settings.get('daily_limit', 1000)),
                 help="Maximum number of leads you can scrape per day."
             )
             

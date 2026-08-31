@@ -1,5 +1,6 @@
 import string
 import os
+import requests
 import database
 
 def load_env():
@@ -49,6 +50,7 @@ def generate_templated_proposal(lead, template):
     name = lead.get('name', 'Business Owner')
     category = lead.get('category', 'business')
     query = lead.get('query', '')
+    website_status = lead.get('website_status', 'No Website')
     
     if category.lower() in ["local business", "business"]:
         category = extract_category_from_query(query, category)
@@ -57,17 +59,20 @@ def generate_templated_proposal(lead, template):
     address = lead.get('address', '')
     location = extract_location(address)
     
-    # Safely format placeholders
     safe_data = SafeDict(
         name=name,
         category=category,
         location=location,
         phone=phone,
-        address=address
+        address=address,
+        website_status=website_status
     )
     
     if not template:
-        template = "Hi {name},\n\nWe noticed your {category} business in {location} doesn't have a website yet. We'd love to help build one for you!\n\nBest,\nAccelerator Technologies"
+        if website_status in ("Unresponsive Website", "Outdated Website"):
+            template = "Hi {name},\n\nWe checked your {category} website in {location} on mobile devices and noticed it's not fully responsive or mobile-friendly. A smooth mobile redesign could double your client inquiries!\n\nBest,\nAccelerator Technologies"
+        else:
+            template = "Hi {name},\n\nWe noticed your {category} business in {location} doesn't have a website yet. We'd love to help build one for you!\n\nBest,\nAccelerator Technologies"
         
     return template.format_map(safe_data)
 
@@ -75,6 +80,8 @@ def generate_ai_proposal(lead, api_key, provider="Gemini", language="English"):
     name = lead.get('name', 'Business Owner')
     category = lead.get('category', 'business')
     query = lead.get('query', '')
+    website_status = lead.get('website_status', 'No Website')
+    website = lead.get('website', '')
     
     if category.lower() in ["local business", "business"]:
         category = extract_category_from_query(query, category)
@@ -82,38 +89,55 @@ def generate_ai_proposal(lead, api_key, provider="Gemini", language="English"):
     address = lead.get('address', '')
     location = extract_location(address)
     
-    prompt = f"""You are a professional, friendly, and persuasive outreach copywriter working for "Accelerator Technologies".
-Write a short, engaging, and highly personalized cold outreach message offering website design services to a local business that does NOT have a website yet.
+    if website_status in ("Unresponsive Website", "Outdated Website") and website:
+        status_context = f"The business has an existing website ({website}), BUT it is NOT mobile-responsive and has bad mobile usability. Offer a fast, mobile-friendly redesign that turns mobile visitors into calling customers."
+    else:
+        status_context = "The business currently has NO website. Offer to build their very first modern, high-converting website."
 
-Business Details:
-- Name: {name}
-- Category: {category}
-- Location: {location}
+    prompt = f"""Write a short, highly creative, organic, and human-written cold outreach WhatsApp message offering web design / redesign services to {name} (Category: {category}, Location: {location}).
 
-Persuasive Message Structure (use this logic, but vary the wording slightly for each business to make every message unique and organic):
-1. Greeting: A warm greeting (e.g. "Hi {name}!" or "Hello there,").
-2. The Hook: Mention that you checked {category} online in {location} and noticed they don't have a website yet.
-3. The Pain Point: Explain that customers searching Google for {category} in {location} are finding their competitors instead of them, meaning potential business is walking away every week for free.
-4. The Solution: We build websites that fix exactly this. Offer to send a free mockup of what their website could look like, with no cost and no pressure.
-5. Soft Call-to-Action: A brief, friendly question (e.g. "Interested?" or "Would you be open to seeing a quick concept?").
-6. Sign-off: "Accelerator Technologies".
+WEBSITE AUDIT CONTEXT:
+{status_context}
 
-Requirements:
-- Sound human-written, conversational, and helpful (NOT robotic or overly formal).
-- Keep it short and concise (under 120 words), suitable for WhatsApp.
+IMPORTANT CREATIVE REQUIREMENTS:
+- Make this message completely UNIQUE, organic, and tailored specifically to a {category} business in {location}.
+- DO NOT use generic robotic template structures or numbered bullet steps.
+- Focus on how a modern mobile-responsive website brings in more local {category} calls, jobs, or clients every week.
+- Vary the opening line, tone, and specific niche references (e.g. mention emergency calls for plumbers/electricians, direct loads for trucking, online booking for dentists/salons).
+- Keep it under 100 words, friendly conversational tone, with a soft casual question at the end.
 - Language: The response MUST be written entirely in {language}.
-- WhatsApp formatting: Do NOT use markdown bolding (like **text**) or titles/headers. Keep it as plain text paragraphs. Emojis are allowed.
+- Sign off as "Accelerator Technologies".
+- WhatsApp formatting: Do NOT use markdown headers or bolding (**text**). Keep as natural plain text paragraphs with emojis.
 """
 
     if provider == "Gemini":
         try:
-            import google.generativeai as genai  # type: ignore
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text.strip()
-            raise Exception("Empty response from Gemini")
+            models_to_try = ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-flash-latest']
+            last_err = None
+            for m in models_to_try:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                    payload = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.9,
+                            "topP": 0.95
+                        }
+                    }
+                    resp = requests.post(url, json=payload, timeout=8)
+                    if resp.status_code == 200:
+                        res_json = resp.json()
+                        if "candidates" in res_json and len(res_json["candidates"]) > 0:
+                            parts = res_json["candidates"][0]["content"]["parts"]
+                            if parts and "text" in parts[0]:
+                                return parts[0]["text"].strip()
+                    else:
+                        err_msg = resp.json().get("error", {}).get("message", f"HTTP {resp.status_code}")
+                        last_err = f"{m}: {err_msg}"
+                except Exception as ex:
+                    last_err = str(ex)
+                    continue
+            raise Exception(f"All Gemini models failed ({last_err})")
         except Exception as e:
             return f"Error generating Gemini proposal: {str(e)}\n\n(Fallback Template Message):\n"
             
@@ -144,9 +168,10 @@ def get_proposal_for_lead(lead):
     use_ai = settings.get('use_ai', 'False') == 'True'
     lang = settings.get('proposal_language', 'English')
     
-    # If the lead already has a custom proposal generated/saved, return it
-    if lead.get('custom_proposal'):
-        return lead['custom_proposal']
+    # If the lead already has a user-edited custom proposal (and not an error or tag), return it
+    cp = lead.get('custom_proposal')
+    if cp and not cp.startswith('Error generating') and not cp.startswith('[EMAIL:') and '404' not in cp:
+        return cp
         
     proposal_text = ""
     if use_ai:
@@ -175,4 +200,10 @@ def get_proposal_for_lead(lead):
         tpl = settings.get('proposal_template_urdu') if lang == 'Urdu' else settings.get('proposal_template')
         proposal_text = generate_templated_proposal(lead, tpl)
         
+    if proposal_text and lead.get('id') and not proposal_text.startswith('Error generating'):
+        try:
+            database.update_custom_proposal(lead['id'], proposal_text)
+        except Exception:
+            pass
+            
     return proposal_text
