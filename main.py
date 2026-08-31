@@ -27,6 +27,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "message": "LeadForge AI Backend API is running successfully 🚀",
+        "docs": "/docs"
+    }
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
 # Initialize database
 database.init_db()
 

@@ -77,97 +77,100 @@ def verify_password(password: str, stored_hash: str, salt: str) -> bool:
 # DATABASE INITIALIZATION
 # ==========================================
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # Settings table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-
-    # Users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            full_name TEXT,
-            role TEXT NOT NULL DEFAULT 'user',
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    # User activity table (tracks daily scrapes & outreach)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_activity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            action_type TEXT NOT NULL,
-            count INTEGER NOT NULL DEFAULT 1,
-            details TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    # Leads table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS leads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            address TEXT,
-            phone TEXT,
-            website TEXT,
-            website_status TEXT,
-            category TEXT,
-            query TEXT,
-            google_maps_url TEXT UNIQUE,
-            scraped_date TEXT,
-            message_status TEXT DEFAULT 'New',
-            sent_timestamp TEXT,
-            custom_proposal TEXT,
-            email TEXT,
-            user_id INTEGER,
-            user_name TEXT
-        )
-    """)
-
-    # Check and add missing columns to leads table if upgrading
-    cursor.execute("PRAGMA table_info(leads)")
-    existing_cols = [row[1] for row in cursor.fetchall()]
-    for col_name, col_type in [
-        ("website_status", "TEXT"),
-        ("email", "TEXT"),
-        ("user_id", "INTEGER"),
-        ("user_name", "TEXT")
-    ]:
-        if col_name not in existing_cols:
-            try:
-                cursor.execute(f"ALTER TABLE leads ADD COLUMN {col_name} {col_type}")
-            except Exception as e:
-                print(f"Error adding column {col_name} to leads: {e}")
-
-    conn.commit()
-
-    # Seed default admin user if none exists
-    cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1")
-    admin_exists = cursor.fetchone()
-    if not admin_exists:
-        pw_hash, salt = hash_password("admin123")
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Settings table
         cursor.execute("""
-            INSERT OR IGNORE INTO users (username, password_hash, salt, full_name, role, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, ("admin", pw_hash, salt, "Super Administrator", "admin", 1, now_str))
-        conn.commit()
-        print("Default admin created: username='admin', password='admin123'")
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
 
-    conn.close()
+        # Users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                full_name TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # User activity table (tracks daily scrapes & outreach)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                action_type TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 1,
+                details TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # Leads table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                address TEXT,
+                phone TEXT,
+                website TEXT,
+                website_status TEXT,
+                category TEXT,
+                query TEXT,
+                google_maps_url TEXT UNIQUE,
+                scraped_date TEXT,
+                message_status TEXT DEFAULT 'New',
+                sent_timestamp TEXT,
+                custom_proposal TEXT,
+                email TEXT,
+                user_id INTEGER,
+                user_name TEXT
+            )
+        """)
+
+        # Check and add missing columns to leads table if upgrading
+        cursor.execute("PRAGMA table_info(leads)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        for col_name, col_type in [
+            ("website_status", "TEXT"),
+            ("email", "TEXT"),
+            ("user_id", "INTEGER"),
+            ("user_name", "TEXT")
+        ]:
+            if col_name not in existing_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE leads ADD COLUMN {col_name} {col_type}")
+                except Exception as e:
+                    print(f"Error adding column {col_name} to leads: {e}")
+
+        conn.commit()
+
+        # Seed default admin user if none exists
+        cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1")
+        admin_exists = cursor.fetchone()
+        if not admin_exists:
+            pw_hash, salt = hash_password("admin123")
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+                INSERT OR IGNORE INTO users (username, password_hash, salt, full_name, role, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, ("admin", pw_hash, salt, "Super Administrator", "admin", 1, now_str))
+            conn.commit()
+            print("Default admin created: username='admin', password='admin123'")
+
+        conn.close()
+    except Exception as e:
+        print(f"init_db safe warning: {e}")
 
 # Initialize DB on module load
 init_db()
