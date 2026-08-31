@@ -1,7 +1,6 @@
 .venv
 __pycache__
 *.pyc
-frontend
 leads.db
 app.py
 logo.png
