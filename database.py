@@ -6,7 +6,7 @@ from datetime import datetime, date
 
 # Load env for local development
 def load_env():
-    env_path = "/Users/hf/Documents/scrapping/.env"
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
             for line in f:
@@ -28,7 +28,10 @@ try:
 except:
     pass
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "leads.db")
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    DB_PATH = "/tmp/leads.db"
+else:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "leads.db")
 _supabase_client = None
 
 def get_db_connection():
