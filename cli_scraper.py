@@ -28,25 +28,56 @@ def main():
     source = args.source.lower()
     count = 0
     
-    if source in ["bing", "bing_maps"]:
-        log_callback("Launching Bing Maps scraper (Playwright)...")
-        count = scraper.scrape_bing_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
-    elif source in ["google_maps", "google"]:
-        log_callback("Launching Google Maps scraper (Playwright)...")
-        count = scraper.scrape_google_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
-    elif source == "osm":
-        res_osm = scraper.scrape_osm(args.query, args.limit, log_callback, user_id=user_id, user_name=user_name)
-        count = len(res_osm) if isinstance(res_osm, list) else res_osm
-    else: # auto
-        log_callback("Launching Bing Maps primary scraper...")
-        count = scraper.scrape_bing_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
-        
-    if count == 0 and source != "google_maps" and source != "google":
-        log_callback("Primary scraper returned 0 leads. Auto-switching to Google Maps Playwright Scraper...")
-        count = scraper.scrape_google_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
+    try:
+        if source in ["bing", "bing_maps"]:
+            log_callback("Launching Bing Maps scraper (Playwright)...")
+            try:
+                count = scraper.scrape_bing_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
+            except Exception as e:
+                log_callback(f"Bing Maps scraper notice: {e}")
+        elif source in ["google_maps", "google"]:
+            log_callback("Launching Google Maps scraper (Playwright)...")
+            try:
+                count = scraper.scrape_google_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
+            except Exception as e:
+                log_callback(f"Google Maps scraper notice: {e}")
+        elif source == "osm":
+            log_callback("Launching OpenStreetMap scraper...")
+            try:
+                res_osm = scraper.scrape_osm(args.query, args.limit, log_callback, user_id=user_id, user_name=user_name)
+                count = len(res_osm) if isinstance(res_osm, list) else (res_osm or 0)
+            except Exception as e:
+                log_callback(f"OSM scraper notice: {e}")
+        else: # auto
+            log_callback("Launching Bing Maps primary scraper...")
+            try:
+                count = scraper.scrape_bing_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
+            except Exception as e:
+                log_callback(f"Bing Maps notice: {e}")
+            
+            if count == 0:
+                log_callback("Primary scraper returned 0 leads. Auto-switching to Google Maps Playwright Scraper...")
+                try:
+                    count = scraper.scrape_google_maps(args.query, args.limit, headless_bool, log_callback, user_id=user_id, user_name=user_name)
+                except Exception as e:
+                    log_callback(f"Google Maps notice: {e}")
+
+            if count == 0:
+                log_callback("Google Maps returned 0 leads. Auto-switching to OpenStreetMap Engine...")
+                try:
+                    res_osm = scraper.scrape_osm(args.query, args.limit, log_callback, user_id=user_id, user_name=user_name)
+                    count = len(res_osm) if isinstance(res_osm, list) else (res_osm or 0)
+                except Exception as e:
+                    log_callback(f"OSM notice: {e}")
+
+    except Exception as general_err:
+        log_callback(f"Scraper execution error: {general_err}")
         
     if count > 0 and user_id:
-        database.record_user_activity(user_id, user_name or f"User-{user_id}", "scrape", count, f"Scraped {count} leads for query '{args.query}'")
+        try:
+            database.record_user_activity(user_id, user_name or f"User-{user_id}", "scrape", count, f"Scraped {count} leads for query '{args.query}'")
+        except Exception:
+            pass
 
     # Admins get access to global pool of leads; regular users get their scoped pool
     lookup_user_id = None if user_role == "admin" else user_id
