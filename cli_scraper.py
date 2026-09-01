@@ -12,11 +12,13 @@ def main():
     parser.add_argument("--headless", type=str, default="true", help="Headless mode (true/false)")
     parser.add_argument("--user-id", type=int, default=None, help="User ID initiating the scrape")
     parser.add_argument("--user-name", type=str, default=None, help="Username initiating the scrape")
+    parser.add_argument("--user-role", type=str, default="user", help="User role (admin or user)")
     
     args = parser.parse_args()
     headless_bool = args.headless.lower() == "true"
     user_id = args.user_id
     user_name = args.user_name
+    user_role = (args.user_role or "user").lower()
     
     logs = []
     def log_callback(msg):
@@ -46,7 +48,9 @@ def main():
     if count > 0 and user_id:
         database.record_user_activity(user_id, user_name or f"User-{user_id}", "scrape", count, f"Scraped {count} leads for query '{args.query}'")
 
-    all_leads = database.get_all_raw_leads(user_id=user_id)
+    # Admins get access to global pool of leads; regular users get their scoped pool
+    lookup_user_id = None if user_role == "admin" else user_id
+    all_leads = database.get_all_raw_leads(user_id=lookup_user_id)
     if count > 0:
         leads_data = all_leads[:count]
     else:

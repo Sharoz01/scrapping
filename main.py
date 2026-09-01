@@ -492,6 +492,7 @@ def scrape_leads(payload: ScrapeRequest, user: Optional[dict] = Depends(get_curr
     try:
         user_id_str = str(user["id"]) if user else "1"
         user_name_str = user["username"] if user else "system"
+        user_role_str = user.get("role", "admin") if user else "admin"
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
         cli_path = os.path.join(base_dir, "cli_scraper.py")
@@ -503,7 +504,8 @@ def scrape_leads(payload: ScrapeRequest, user: Optional[dict] = Depends(get_curr
             "--source", payload.source or "auto",
             "--headless", "true",
             "--user-id", user_id_str,
-            "--user-name", user_name_str
+            "--user-name", user_name_str,
+            "--user-role", user_role_str
         ]
         
         proc = subprocess.Popen(
