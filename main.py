@@ -493,8 +493,11 @@ def scrape_leads(payload: ScrapeRequest, user: Optional[dict] = Depends(get_curr
         user_id_str = str(user["id"]) if user else "1"
         user_name_str = user["username"] if user else "system"
         
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cli_path = os.path.join(base_dir, "cli_scraper.py")
+
         cmd = [
-            sys.executable, "cli_scraper.py",
+            sys.executable, cli_path,
             "--query", payload.query,
             "--limit", str(payload.limit),
             "--source", payload.source or "auto",
@@ -505,7 +508,7 @@ def scrape_leads(payload: ScrapeRequest, user: Optional[dict] = Depends(get_curr
         
         proc = subprocess.Popen(
             cmd,
-            cwd="/Users/hf/Documents/scrapping",
+            cwd=base_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True

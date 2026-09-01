@@ -4,7 +4,8 @@ import requests
 import database
 
 def load_env():
-    env_path = "/Users/hf/Documents/scrapping/.env"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base_dir, ".env")
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
             for line in f:
